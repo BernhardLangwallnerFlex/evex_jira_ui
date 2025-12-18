@@ -17,7 +17,7 @@ jira = JIRA(
 )
 
 
-def fetch_jira_issues(start_dt, end_dt, max_issues=1000):
+def fetch_jira_issues(start_dt, end_dt, max_issues=1000, project="SDIPR"):
         
     jira = JIRA(
         server=JIRA_URL,
@@ -26,7 +26,7 @@ def fetch_jira_issues(start_dt, end_dt, max_issues=1000):
     start_str = start_dt.strftime("%Y-%m-%d %H:%M")
     end_str   = end_dt.strftime("%Y-%m-%d %H:%M")
     all_issues = []
-    jql = f"project = SDIPR AND created >= '{start_str}' AND created <= '{end_str}' ORDER BY created DESC"
+    jql = f"project = {project} AND created >= '{start_str}' AND created <= '{end_str}' ORDER BY created DESC"
     next_token = None
     counter = 0
     b_max_results = 100
