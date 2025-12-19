@@ -1,0 +1,16 @@
+streamlit==1.52.1
+pandas==2.3.3
+numpy==2.3.5
+plotly==6.5.0
+pytz==2025.2
+
+# JIRA fetch
+jira==3.10.5
+python-dotenv==1.2.1
+
+# UI widgets
+streamlit-aggrid==1.2.1
+pygwalker>=0.4.9
+pyarrow==22.0.0
+
+
