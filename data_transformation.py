@@ -80,8 +80,10 @@ def load_issues(issues):
             df['filiale'].append("ID_" + str(issue['fields']['customfield_10674'][0]['objectId']))
         except:
             df['filiale'].append('')
-
-        df['Link'].append(issue['fields']['customfield_10010']['_links']['agent'])
+        try:
+            df['Link'].append(issue['fields']['customfield_10010']['_links']['agent'])
+        except:
+            df['Link'].append('')
 
     df = pd.DataFrame(df)
     ### convert created, updated to datetime
