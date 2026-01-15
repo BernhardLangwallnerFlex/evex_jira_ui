@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go # Required for adding the custom text layer
 from jira_loader import fetch_jira_issues
 from data_loading import save_data, load_data
 from styles import CUSTOM_CSS
@@ -70,7 +71,7 @@ except:
 # Optional global filters in sidebar
 start_date = datetime.now(timezone.utc) - timedelta(days=7)
 end_date = datetime.now(timezone.utc)
-start_date, end_date = st.sidebar.date_input("Zeitraum", value=(start_date, end_date))
+start_date, end_date = st.sidebar.date_input("Zeitraum (erstellt)", value=(start_date, end_date))
 
 tz = pytz.UTC
 
@@ -145,17 +146,62 @@ tab_overview, tab_categories, tab_subcategories, tab_sources, tab_status, tab_cy
 with tab_overview:
     st.header("📊 Überblick")
 
-    result = df[[x_axis,'status','key']].groupby([x_axis,'status']).count().reset_index()
-    print(result['key'].mean())
-    # result['status_key'] = result['status'] + ' (' + result['key'].astype(str) + ')'
-    result['status_key'] = result['key'].astype(str) 
-    # plot using plotly, show status and key values inside of bars
-    fig = px.bar(result, x=x_axis, y='key', text='status_key', color='status')
-    # add x label
+    # 1. Prepare the Data
+    result = df[[x_axis, 'status', 'key']].groupby([x_axis, 'status']).count().reset_index()
+
+    # Calculate percentages
+    total_per_group = result.groupby(x_axis)['key'].transform('sum')
+    result['percentage'] = result['key'] / total_per_group
+
+    # Create custom label
+    result['custom_label'] = result.apply(
+        lambda x: f"{x['key']} ({x['percentage']:.0%})", axis=1
+    )
+
+    # --- NEW: Define Order Logic ---
+    # Get all unique statuses
+    status_order = result['status'].unique().tolist()
+
+    # If "Fertig" exists, move it to the front of the list (Index 0 = Bottom of stack)
+    target_status = "Fertig"
+    if target_status in status_order:
+        status_order.remove(target_status)
+        status_order.insert(0, target_status)
+    # -------------------------------
+
+    # 2. Add Toggle
+    mode = st.radio(
+        "Ansicht wählen:",
+        ["Absolute Zahlen", "Relativ (%)"],
+        horizontal=True,
+        index=0 
+    )
+
+    # 3. Configure Axis Variables
+    if mode == "Absolute Zahlen":
+        y_col = 'key'
+        y_title = 'Anzahl Tickets'
+        y_format = None
+    else:
+        y_col = 'percentage'
+        y_title = 'Prozentualer Anteil'
+        y_format = '.0%' 
+
+    # 4. Plot with Category Order
+    fig = px.bar(
+        result, 
+        x=x_axis, 
+        y=y_col, 
+        text='custom_label', 
+        color='status',
+        # Apply the forced order here
+        category_orders={'status': status_order} 
+    )
+
     fig.update_xaxes(title_text=x_axis_label)
-    # add y label
-    fig.update_yaxes(title_text='Anzahl Tickets')
+    fig.update_yaxes(title_text=y_title, tickformat=y_format)
     fig = apply_font(fig)
+
     st.plotly_chart(fig, use_container_width=False, height=plot_height, width=plot_width)
 
 # -------------------------------
@@ -163,15 +209,88 @@ with tab_overview:
 # -------------------------------
 with tab_categories:
     st.header("📊 Aufteilung Kategorien")
+
+    # 1. Prepare Data
     result = df[['Hauptkategorie','resolution','key']].groupby(['Hauptkategorie','resolution']).count().reset_index()
     result = result.rename(columns={'key': 'Anzahl'})
-    # sort by overall count
-    result = result.sort_values('Anzahl', ascending=False)
 
-    fig = px.bar(result, x='Hauptkategorie', y='Anzahl', color='resolution')
-    fig = apply_font(fig)
+    # Calculate Totals & Percentages
+    total_per_group = result.groupby('Hauptkategorie')['Anzahl'].transform('sum')
+    result['percentage'] = result['Anzahl'] / total_per_group
+
+    result['custom_label'] = result.apply(
+        lambda x: f"{x['Anzahl']}<br>({x['percentage']:.0%})", axis=1
+    )
+
+    # 2. Define Sorting
+    category_totals = result.groupby('Hauptkategorie')['Anzahl'].sum().reset_index()
+    category_totals = category_totals.sort_values('Anzahl', ascending=False)
+    sorted_categories = category_totals['Hauptkategorie'].tolist()
+
+    resolution_order = result['resolution'].unique().tolist()
+    if "Same day" in resolution_order:
+        resolution_order.remove("Same day")
+        resolution_order.insert(0, "Same day")
+
+    # 3. Add Toggle
+    mode_cat = st.radio(
+        "Ansicht wählen:",
+        ["Absolute Zahlen", "Relativ (%)"],
+        horizontal=True,
+        index=0,
+        key="toggle_categories" 
+    )
+
+    # 4. Configure Axis
+    if mode_cat == "Absolute Zahlen":
+        y_col = 'Anzahl'
+        y_title = 'Anzahl Tickets'
+        y_format = None
+        y_text_pos = category_totals['Anzahl']
+        text_content = category_totals['Anzahl'].astype(str)
+        y_max = category_totals['Anzahl'].max() * 1.15 
+    else:
+        y_col = 'percentage'
+        y_title = 'Prozentualer Anteil'
+        y_format = '.0%'
+        y_text_pos = [1] * len(category_totals)
+        text_content = category_totals['Anzahl'].apply(lambda x: f"Total: {x}")
+        y_max = 1.15
+
+    # 5. Plot Main Bars
+    fig = px.bar(
+        result, 
+        x='Hauptkategorie', 
+        y=y_col, 
+        color='resolution',
+        text='custom_label',
+        color_discrete_map={"Same day": "green", "> 1 day": "#FFD700"},
+        category_orders={'resolution': resolution_order, 'Hauptkategorie': sorted_categories}
+    )
+
+    # --- FIX STEP 1: Apply styling to the bars NOW, before adding the scatter trace ---
+    # This prevents 'apply_font' from trying to set bar properties on the scatter trace later
+    fig.update_traces(textposition='auto') 
+    fig = apply_font(fig) 
+
+    # --- FIX STEP 2: Add the Scatter Trace (Totals) AFTER styling ---
+    fig.add_trace(
+        go.Scatter(
+            x=category_totals['Hauptkategorie'],
+            y=y_text_pos,
+            text=text_content,
+            mode='text',
+            textposition='top center',
+            textfont=dict(size=14, color='black', weight='bold'),
+            showlegend=False,
+            hoverinfo='skip'
+        )
+    )
+
+    # Final Layout Updates
+    fig.update_yaxes(title_text=y_title, tickformat=y_format, range=[0, y_max])
+    
     st.plotly_chart(fig, use_container_width=False, height=plot_height, width=plot_width)
-
 
 # -------------------------------
 # Tab 3 – Categories Breakdown
@@ -191,23 +310,94 @@ with tab_subcategories:
 # -------------------------------
 # Tab 3 – Sources Breakdown
 # -------------------------------
+
 with tab_sources:
     st.header("📊 Aufteilung Quellen")
-    # toggle to switch between week_string and created_string
 
-    # Plot request_type in bar chart
-    result = df[df['request_type']!=''][['request_type',x_axis,'key']].groupby(['request_type',x_axis]).count().reset_index()
-    fig = px.bar(result, x=x_axis, y='key', text='key', color='request_type')
-    # set width of plot
-    # add share as labels inside of bars, as percentage
+    # 1. Prepare Data
+    # Filter out empty request types and group
+    result = df[df['request_type']!=''][['request_type', x_axis, 'key']].groupby(['request_type', x_axis]).count().reset_index()
+
+    # Calculate Totals & Percentages per x-axis group
+    # We group by x_axis to get the total stack height for each column
+    total_per_group = result.groupby(x_axis)['key'].transform('sum')
+    result['percentage'] = result['key'] / total_per_group
+
+    # Create Custom Label: "Count <br> (Percentage%)"
+    result['custom_label'] = result.apply(
+        lambda x: f"{x['key']}({x['percentage']:.0%})", axis=1
+    )
+
+    # 2. Calculate Totals for Top Labels
+    # Create a separate DataFrame for the totals that will sit on top of the bars
+    group_totals = result.groupby(x_axis)['key'].sum().reset_index()
+    
+    # 3. Add Toggle
+    mode_source = st.radio(
+        "Ansicht wählen:",
+        ["Absolute Zahlen", "Relativ (%)"],
+        horizontal=True,
+        index=0,
+        key="toggle_sources"  # Unique key is required for Streamlit widgets
+    )
+
+    # 4. Configure Axis and Top Labels based on toggle
+    if mode_source == "Absolute Zahlen":
+        y_col = 'key'
+        y_title = 'Anzahl Tickets'
+        y_format = None
+        
+        # Labels for top of bars
+        y_text_pos = group_totals['key']
+        text_content = group_totals['key'].astype(str)
+        # Add 15% buffer to Y-axis max so labels fit
+        y_max = group_totals['key'].max() * 1.15
+    else:
+        y_col = 'percentage'
+        y_title = 'Prozentualer Anteil'
+        y_format = '.0%'
+        
+        # Labels for top of bars (always at 100%)
+        y_text_pos = [1] * len(group_totals)
+        # Show "Total: N" so context isn't lost in percent mode
+        text_content = group_totals['key'].apply(lambda x: f"Total: {x}")
+        y_max = 1.15
+
+    # 5. Plot Main Bars
+    fig = px.bar(
+        result, 
+        x=x_axis, 
+        y=y_col, 
+        color='request_type',
+        text='custom_label'
+    )
+
+    # --- CRITICAL: Apply Bar Styling BEFORE adding Scatter trace ---
+    # This prevents the "Invalid property insidetextanchor" error
     fig.update_traces(
         textposition='inside',
         insidetextanchor='middle'
     )
-    # add y axis label  
-    fig.update_yaxes(title_text='Anzahl Tickets')
-    fig.update_xaxes(title_text=x_axis_label)
     fig = apply_font(fig)
+
+    # 6. Add Scatter Trace for Totals
+    fig.add_trace(
+        go.Scatter(
+            x=group_totals[x_axis],
+            y=y_text_pos,
+            text=text_content,
+            mode='text',
+            textposition='top center',
+            textfont=dict(size=12, color='black', weight='bold'),
+            showlegend=False,
+            hoverinfo='skip'
+        )
+    )
+
+    # 7. Final Layout Updates
+    fig.update_xaxes(title_text=x_axis_label)
+    fig.update_yaxes(title_text=y_title, tickformat=y_format, range=[0, y_max])
+    
     st.plotly_chart(fig, use_container_width=False, height=plot_height, width=plot_width)
 
 # -------------------------------
